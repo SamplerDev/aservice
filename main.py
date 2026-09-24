@@ -5,10 +5,15 @@ from typing import Optional, List
 import requests
 from PIL import Image
 from fastapi import FastAPI, HTTPException
+from fastapi.secuity import APIKeyHeader
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+
+
+
+
 
 load_dotenv()
 
@@ -56,6 +61,15 @@ class ConfirmRequest(BaseModel):
 # FUNCIONES AUXILIARES
 # ------------------------------------------------------------------
 
+async def verify_internal_key(api_key: str = Security(api_key_header)):
+    """Verifica que la petición venga del servidor Node.js autorizado."""
+    if not INTERNAL_API_KEY or api_key != INTERNAL_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acceso no autorizado: X-API-Key inválida o ausente"
+        )
+
+
 def optimizar_flyer_para_vision(imagen_bytes: bytes, max_size: int = 1024) -> bytes:
     img = Image.open(io.BytesIO(imagen_bytes))
     if img.mode in ("RGBA", "P"):
@@ -74,7 +88,7 @@ async def health_check():
     return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
 
 # 1. Extracción Multimodal desde Flyer
-@app.post("/agent/extract", response_model=OfertaViaje)
+@app.post("/agent/extract", response_model=OfertaViaje, dependencies=[Depends(verify_internal_key)])
 async def extract_travel_info(payload: ExtractRequest):
     try:
         img_response = requests.get(payload.image_url)
@@ -101,7 +115,7 @@ async def extract_travel_info(payload: ExtractRequest):
         raise HTTPException(status_code=500, detail=f"Error en extracción Gemini: {str(e)}")
 
 # 2. Asistente Conversacional RAG
-@app.post("/agent/chat")
+@app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
 async def chat_agent(payload: ChatRequest):
     try:
         system_instruction = f"""
@@ -136,7 +150,7 @@ async def chat_agent(payload: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Error en Chat Gemini: {str(e)}")
 
 # 3. Parser de Confirmación Humana
-@app.post("/agent/confirm", response_model=ConfirmResult)
+@app.post("/agent/confirm", response_model=ConfirmResult, dependencies=[Depends(verify_internal_key)])
 async def parse_admin_confirmation(payload: ConfirmRequest):
     try:
         prompt = f"Determina si el siguiente mensaje del administrador autoriza la publicación ('APROBAR') o la rechaza ('RECHAZAR'):\n'{payload.admin_message}'"
