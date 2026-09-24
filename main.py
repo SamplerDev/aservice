@@ -21,6 +21,9 @@ app = FastAPI(title="AI Agentic Microservice (Gemini)")
 
 # Inicializar cliente oficial de Google GenAI
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+API_KEY_NAME = "X-API-Key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
@@ -62,7 +65,6 @@ class ConfirmRequest(BaseModel):
 # ------------------------------------------------------------------
 
 async def verify_internal_key(api_key: str = Security(api_key_header)):
-    """Verifica que la petición venga del servidor Node.js autorizado."""
     if not INTERNAL_API_KEY or api_key != INTERNAL_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
