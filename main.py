@@ -5,7 +5,7 @@ from typing import Optional, List
 import requests
 from PIL import Image
 from fastapi import FastAPI, HTTPException
-from fastapi.secuity import APIKeyHeader
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
