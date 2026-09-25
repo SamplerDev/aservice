@@ -25,7 +25,7 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
-
+print(INTERNAL_API_KEY)
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
@@ -98,8 +98,7 @@ class FlyerPayload(BaseModel):
 
 @app.post("/agent/extract-flyer")
 async def extract_flyer(payload: FlyerPayload, x_api_key: str = Header(None)):
-    # 1. Validar la API Key interna entre Node.js y Python
-    if x_api_key != "mi_clave_super_secreta_node_python_2026":
+    if x_api_key != INTERNAL_API_KEY:
         raise HTTPException(status_code=401, detail="X-API-Key interna inválida")
 
     contents = []
