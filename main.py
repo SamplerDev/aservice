@@ -3,8 +3,9 @@ import io
 from enum import Enum
 from typing import Optional, List
 import requests
+import base64
 from PIL import Image
-from fastapi import FastAPI, HTTPException, Security, Depends, status
+from fastapi import FastAPI, HTTPException, Security, Depends, status, Header
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from google import genai
