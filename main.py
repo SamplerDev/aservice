@@ -13,6 +13,9 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+import asyncio
+
+MODELS_FALLBACK = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
 # ------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
@@ -118,6 +121,10 @@ class OfertaViaje(BaseModel):
     contacto: Optional[str] = Field(None, description="Teléfono o medio de contacto extraído")
     cupos: Optional[int] = Field(1, description="Cantidad estimada de cupos o lugares disponibles mencionados")
 
+# NUEVO: Permite extraer 1 o N ofertas de una sola imagen/texto
+class ListaOfertasViaje(BaseModel):
+    ofertas: List[OfertaViaje] = Field(description="Lista de todas las ofertas de viaje o paquetes encontrados")
+
 class FlyerPayload(BaseModel):
     text_content: Optional[str] = ""
     image_base64: Optional[str] = None
@@ -154,6 +161,45 @@ def optimizar_flyer_para_vision(imagen_bytes: bytes, max_size: int = 1024) -> Im
     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     return img
 
+async def generate_with_fallback(contents, system_instruction, response_schema=None):
+    last_error = None
+    
+    for model_name in MODELS_FALLBACK:
+        for attempt in range(2):
+            try:
+                log.info("GEMINI_CALL", f"Invocando {model_name} (Intento {attempt + 1})...")
+                start_time = time.time()
+                
+                config_args = {
+                    "system_instruction": system_instruction,
+                    "temperature": 0.2
+                }
+                if response_schema:
+                    config_args["response_mime_type"] = "application/json"
+                    config_args["response_schema"] = response_schema
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_args)
+                )
+                
+                duration = round((time.time() - start_time) * 1000, 2)
+                log.success("GEMINI_RES", f"Respuesta obtenida con {model_name} en {duration}ms")
+                return response
+
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                log.warn("GEMINI_RETRY", f"Falla con {model_name}: {err_str[:120]}... Reintentando.")
+                
+                if "503" in err_str or "429" in err_str:
+                    await asyncio.sleep(1.5)
+                else:
+                    break
+                    
+    raise HTTPException(status_code=503, detail=f"Servicios de Google saturados. Último error: {str(last_error)}")
+
 # ------------------------------------------------------------------
 # ENDPOINTS
 # ------------------------------------------------------------------
@@ -166,22 +212,15 @@ async def health_check():
 # 1. Extracción Multimodal desde Flyer
 @app.post("/agent/extract-flyer", dependencies=[Depends(verify_internal_key)])
 async def extract_flyer(payload: FlyerPayload):
-    log.info("FLYER_REQ", "Payload recibido para extracción de flyer:", {
-        "has_text": bool(payload.text_content),
-        "text_length": len(payload.text_content) if payload.text_content else 0,
-        "has_image_base64": bool(payload.image_base64)
-    })
+    log.info("FLYER_REQ", "Payload recibido para extracción múltiple de flyer...")
 
     contents = []
 
-    # Decodificación y optimización de imagen Base64
     if payload.image_base64:
         try:
-            log.info("IMAGE_PROC", "Decodificando Base64 y optimizando imagen...")
             image_bytes = base64.b64decode(payload.image_base64)
             img_pil = optimizar_flyer_para_vision(image_bytes)
             contents.append(img_pil)
-            log.success("IMAGE_PROC_OK", f"Imagen lista para Gemini Vision [Resolución: {img_pil.size[0]}x{img_pil.size[1]}px]")
         except Exception as e:
             log.error("IMAGE_PROC_ERR", f"Error procesando imagen Base64: {str(e)}")
 
@@ -189,35 +228,29 @@ async def extract_flyer(payload: FlyerPayload):
         contents.append(f"Texto del mensaje/flyer:\n{payload.text_content}")
 
     if not contents:
-        log.warn("FLYER_ABORT", "No se recibió texto ni imagen válida.")
         raise HTTPException(status_code=400, detail="No se proporcionó información para extraer.")
 
     try:
-        log.info("GEMINI_CALL", "Invocando a Gemini 2.5 Flash (Structured Output)...")
-        start_gemini = time.time()
+        log.info("GEMINI_CALL", "Invocando a Gemini 2.5 Flash (Structured Output Múltiple)...")
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction="Analiza la información proporcionada (texto y/o afiche publicitario) y extrae los datos del viaje.",
-                response_mime_type="application/json",
-                response_schema=OfertaViaje,
-                temperature=0.1
-            )
+        system_instruction = (
+            "Analiza minuciosamente la información proporcionada (texto e/o imagen). "
+            "Es común que un afiche contenga MÚLTIPLES viajes, destinos o promociones distintas. "
+            "Extrae TODAS y cada una de las ofertas de viaje individuales que identifiques."
         )
 
-        duration = round((time.time() - start_gemini) * 1000, 2)
-        log.success("GEMINI_RES", f"Gemini respondió en {duration}ms:", response.text)
+        response = await generate_with_fallback(
+            contents=contents,
+            system_instruction=system_instruction,
+            response_schema=ListaOfertasViaje # <-- Usamos la lista como esquema
+        )
 
-        # Parsear respuesta JSON estructurada a Diccionario
         datos_dict = json.loads(response.text)
         return {"ok": True, "datos_extraidos": datos_dict}
 
     except Exception as e:
         log.error("GEMINI_ERR", f"Error procesando extracción con Gemini: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error analizando con Gemini: {str(e)}")
-
 
 # 2. Asistente Conversacional RAG
 @app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
