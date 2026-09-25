@@ -90,7 +90,7 @@ async def health_check():
     return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
 
 # 1. Extracción Multimodal desde Flyer
-@app.post("/agent/extract", response_model=OfertaViaje, dependencies=[Depends(verify_internal_key)])
+@app.post("/agent/extract-flyer", response_model=OfertaViaje, dependencies=[Depends(verify_internal_key)])
 async def extract_travel_info(payload: ExtractRequest):
     try:
         img_response = requests.get(payload.image_url)
