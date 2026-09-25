@@ -4,24 +4,33 @@ import time
 import base64
 import logging
 import json
+import asyncio
+import httpx
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from PIL import Image
-from fastapi import FastAPI, HTTPException, Security, Depends, status, Request
+from fastapi import FastAPI, HTTPException, Security, Depends, status, Request, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-import asyncio
+
+# ------------------------------------------------------------------
+# ENTORNO Y CONFIGURACIÓN
+# ------------------------------------------------------------------
+load_dotenv()
 
 MODELS_FALLBACK = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+NODE_CALLBACK_URL = os.getenv("NODE_CALLBACK_URL")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
 # ------------------------------------------------------------------
 class DefaultTagFilter(logging.Filter):
-    """Inyecta un tag 'SYSTEM' por defecto para logs de librerías externas (google.genai, uvicorn, etc.)"""
+    """Inyecta un tag 'SYSTEM' por defecto para logs de librerías externas."""
     def filter(self, record):
         if not hasattr(record, "tag"):
             record.tag = "SYSTEM"
@@ -33,7 +42,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# Aplicar el filtro al handler principal
 for handler in logging.getLogger().handlers:
     handler.addFilter(DefaultTagFilter())
 
@@ -59,18 +67,12 @@ class Logger:
         logging.error(f"❌ {msg}{extra}", extra={"tag": tag})
 
 log = Logger()
-# ------------------------------------------------------------------
-# CARGA DE ENTORNO E INICIALIZACIÓN
-# ------------------------------------------------------------------
-load_dotenv()
 
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-log.info("STARTUP", "Iniciando AI Agent Microservice (Gemini 2.5 Flash)...")
+log.info("STARTUP", "Iniciando AI Agent Microservice (Gemini)...")
 log.info("ENV_CHECK", "Estado de variables de entorno:", {
     "INTERNAL_API_KEY": "✅ Configurada" if INTERNAL_API_KEY else "❌ FALTANTE",
-    "GEMINI_API_KEY": "✅ Configurada" if GEMINI_API_KEY else "❌ FALTANTE"
+    "GEMINI_API_KEY": "✅ Configurada" if GEMINI_API_KEY else "❌ FALTANTE",
+    "NODE_CALLBACK_URL": "✅ Configurada" if NODE_CALLBACK_URL else "❌ FALTANTE"
 })
 
 if not GEMINI_API_KEY:
@@ -84,7 +86,7 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 # ------------------------------------------------------------------
-# MIDDLEWARE GLOBAL DE LOGGING Y SEGURIDAD
+# MIDDLEWARE Y SEGURIDAD
 # ------------------------------------------------------------------
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -110,10 +112,6 @@ async def verify_internal_key(api_key: str = Security(api_key_header)):
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
-
-
-
-
 class OfertaViaje(BaseModel):
     destino: str = Field(description="Ciudad, región o país principal del viaje")
     fecha_salida: str = Field(description="Fecha en formato YYYY-MM-DD o aproximada/mes")
@@ -121,11 +119,11 @@ class OfertaViaje(BaseModel):
     contacto: Optional[str] = Field(None, description="Teléfono o medio de contacto extraído")
     cupos: Optional[int] = Field(1, description="Cantidad estimada de cupos o lugares disponibles mencionados")
 
-# NUEVO: Permite extraer 1 o N ofertas de una sola imagen/texto
 class ListaOfertasViaje(BaseModel):
     ofertas: List[OfertaViaje] = Field(description="Lista de todas las ofertas de viaje o paquetes encontrados")
 
 class FlyerPayload(BaseModel):
+    phone_number: str
     text_content: Optional[str] = ""
     image_base64: Optional[str] = None
     mime_type: Optional[str] = "image/jpeg"
@@ -136,7 +134,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     user_message: str
-    travel_catalog: List[dict]  # Catálogo filtrado desde Node.js (solo activos y con cupo)
+    travel_catalog: List[dict]
     history: Optional[List[ChatMessage]] = []
 
 class ConfirmAction(str, Enum):
@@ -152,7 +150,7 @@ class ConfirmRequest(BaseModel):
     admin_message: str
 
 # ------------------------------------------------------------------
-# FUNCIONES AUXILIARES
+# FUNCIONES AUXILIARES Y GEMINI FALLBACK
 # ------------------------------------------------------------------
 def optimizar_flyer_para_vision(imagen_bytes: bytes, max_size: int = 1024) -> Image.Image:
     img = Image.open(io.BytesIO(imagen_bytes))
@@ -198,40 +196,32 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
                 else:
                     break
                     
-    raise HTTPException(status_code=503, detail=f"Servicios de Google saturados. Último error: {str(last_error)}")
+    raise Exception(f"Servicios de Google saturados. Último error: {str(last_error)}")
 
 # ------------------------------------------------------------------
-# ENDPOINTS
+# TAREA DE FONDO (ASYNC CALLBACK)
 # ------------------------------------------------------------------
-
-@app.get("/health")
-async def health_check():
-    log.info("HEALTH", "Healthcheck invocado.")
-    return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
-
-# 1. Extracción Multimodal desde Flyer
-@app.post("/agent/extract-flyer", dependencies=[Depends(verify_internal_key)])
-async def extract_flyer(payload: FlyerPayload):
-    log.info("FLYER_REQ", "Payload recibido para extracción múltiple de flyer...")
-
-    contents = []
-
-    if payload.image_base64:
-        try:
-            image_bytes = base64.b64decode(payload.image_base64)
-            img_pil = optimizar_flyer_para_vision(image_bytes)
-            contents.append(img_pil)
-        except Exception as e:
-            log.error("IMAGE_PROC_ERR", f"Error procesando imagen Base64: {str(e)}")
-
-    if payload.text_content:
-        contents.append(f"Texto del mensaje/flyer:\n{payload.text_content}")
-
-    if not contents:
-        raise HTTPException(status_code=400, detail="No se proporcionó información para extraer.")
-
+async def task_extract_flyer_and_notify(payload: FlyerPayload):
+    """
+    Procesa la imagen con Gemini en segundo plano y notifica a Node.js cuando termina.
+    """
     try:
-        log.info("GEMINI_CALL", "Invocando a Gemini 2.5 Flash (Structured Output Múltiple)...")
+        log.info("GEMINI_TASK", f"Iniciando procesamiento de afiche para {payload.phone_number}...")
+        contents = []
+
+        if payload.image_base64:
+            try:
+                image_bytes = base64.b64decode(payload.image_base64)
+                img_pil = optimizar_flyer_para_vision(image_bytes)
+                contents.append(img_pil)
+            except Exception as e:
+                log.error("IMAGE_PROC_ERR", f"Error procesando imagen Base64: {str(e)}")
+
+        if payload.text_content:
+            contents.append(f"Texto del mensaje/flyer:\n{payload.text_content}")
+
+        if not contents:
+            raise Exception("No se proporcionó información ni imagen para procesar.")
 
         system_instruction = (
             "Analiza minuciosamente la información proporcionada (texto e/o imagen). "
@@ -242,23 +232,72 @@ async def extract_flyer(payload: FlyerPayload):
         response = await generate_with_fallback(
             contents=contents,
             system_instruction=system_instruction,
-            response_schema=ListaOfertasViaje # <-- Usamos la lista como esquema
+            response_schema=ListaOfertasViaje
         )
 
         datos_dict = json.loads(response.text)
-        return {"ok": True, "datos_extraidos": datos_dict}
+        log.success("GEMINI_DONE", f"Extracción completada con éxito para {payload.phone_number}")
+
+        # Enviar el resultado de vuelta a Node.js vía Webhook Callback
+        if NODE_CALLBACK_URL:
+            async with httpx.AsyncClient(timeout=30.0) as client_http:
+                res = await client_http.post(
+                    NODE_CALLBACK_URL,
+                    json={
+                        "phoneNumber": payload.phone_number,
+                        "extractedData": datos_dict
+                    },
+                    headers={
+                        "Authorization": f"Bearer {INTERNAL_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                log.info("CALLBACK_SENT", f"Resultado enviado a Node.js (Status: {res.status_code})")
 
     except Exception as e:
-        log.error("GEMINI_ERR", f"Error procesando extracción con Gemini: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error analizando con Gemini: {str(e)}")
+        log.error("TASK_ERR", f"Error en la tarea de fondo de Gemini: {str(e)}")
+        if NODE_CALLBACK_URL:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client_http:
+                    await client_http.post(
+                        NODE_CALLBACK_URL,
+                        json={
+                            "phoneNumber": payload.phone_number,
+                            "error": True,
+                            "message": f"Error procesando la imagen: {str(e)}"
+                        },
+                        headers={"Authorization": f"Bearer {INTERNAL_API_KEY}"}
+                    )
+            except Exception as notify_err:
+                log.error("CALLBACK_FAIL", f"No se pudo notificar el error a Node.js: {str(notify_err)}")
+
+# ------------------------------------------------------------------
+# ENDPOINTS
+# ------------------------------------------------------------------
+
+@app.get("/health")
+async def health_check():
+    return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
+
+# 1. Extracción Multimodal Asincrónica (Background Task)
+@app.post("/agent/extract-flyer", dependencies=[Depends(verify_internal_key)])
+async def extract_flyer(payload: FlyerPayload, background_tasks: BackgroundTasks):
+    log.info("FLYER_REQ", f"Petición recibida para {payload.phone_number}. Programando tarea en segundo plano...")
+    
+    # Programar la tarea asincrónica
+    background_tasks.add_task(task_extract_flyer_and_notify, payload)
+    
+    # Responder a Node.js inmediatamente (menos de 100ms)
+    return {
+        "ok": True,
+        "status": "processing",
+        "message": "Afiche recibido correctamente. Procesando en segundo plano."
+    }
 
 # 2. Asistente Conversacional RAG
 @app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
 async def chat_agent(payload: ChatRequest):
-    log.info("CHAT_REQ", f"Consulta de cliente recibida: '{payload.user_message}'", {
-        "travel_catalog_count": len(payload.travel_catalog),
-        "history_count": len(payload.history)
-    })
+    log.info("CHAT_REQ", f"Consulta recibida: '{payload.user_message}'")
 
     try:
         system_instruction = f"""
@@ -291,14 +330,13 @@ async def chat_agent(payload: ChatRequest):
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
-        log.success("CHAT_RES", f"Respuesta de IA generada en {duration}ms:", response.text)
+        log.success("CHAT_RES", f"Respuesta generada en {duration}ms:", response.text)
 
         return {"response": response.text}
 
     except Exception as e:
         log.error("CHAT_ERR", f"Error en Chat Gemini: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error en Chat Gemini: {str(e)}")
-
 
 # 3. Parser de Confirmación Humana
 @app.post("/agent/confirm", response_model=ConfirmResult, dependencies=[Depends(verify_internal_key)])
