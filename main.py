@@ -17,11 +17,22 @@ from dotenv import load_dotenv
 # ------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
 # ------------------------------------------------------------------
+class DefaultTagFilter(logging.Filter):
+    """Inyecta un tag 'SYSTEM' por defecto para logs de librerías externas (google.genai, uvicorn, etc.)"""
+    def filter(self, record):
+        if not hasattr(record, "tag"):
+            record.tag = "SYSTEM"
+        return True
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s [%(tag)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+# Aplicar el filtro al handler principal
+for handler in logging.getLogger().handlers:
+    handler.addFilter(DefaultTagFilter())
 
 class Logger:
     @staticmethod
@@ -45,7 +56,6 @@ class Logger:
         logging.error(f"❌ {msg}{extra}", extra={"tag": tag})
 
 log = Logger()
-
 # ------------------------------------------------------------------
 # CARGA DE ENTORNO E INICIALIZACIÓN
 # ------------------------------------------------------------------
@@ -97,6 +107,10 @@ async def verify_internal_key(api_key: str = Security(api_key_header)):
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
+
+
+
+
 class OfertaViaje(BaseModel):
     destino: str = Field(description="Ciudad, región o país principal del viaje")
     fecha_salida: str = Field(description="Fecha en formato YYYY-MM-DD o aproximada/mes")
