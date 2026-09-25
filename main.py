@@ -90,31 +90,69 @@ async def health_check():
     return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
 
 # 1. Extracción Multimodal desde Flyer
-@app.post("/agent/extract-flyer", response_model=OfertaViaje, dependencies=[Depends(verify_internal_key)])
-async def extract_travel_info(payload: ExtractRequest):
+class FlyerPayload(BaseModel):
+    text_content: Optional[str] = ""
+    image_url: Optional[str] = None
+    zernio_api_key: Optional[str] = None  # Por si se envía desde Node.js
+
+@app.post("/agent/extract-flyer")
+async def extract_flyer(payload: FlyerPayload, x_api_key: str = Header(None)):
+    # 1. Validar API Key interna entre Node y Python
+    if x_api_key != os.getenv("INTERNAL_API_KEY", "mi_clave_super_secreta_node_python_2026"):
+        raise HTTPException(status_code=401, detail="X-API-Key interna inválida")
+
+    api_key_zernio = payload.zernio_api_key or ZERNIO_API_KEY
+
+    contents = []
+    
+    # 2. Descargar la imagen de Zernio usando la cabecera Bearer
+    if payload.image_url:
+        try:
+            headers = {}
+            # Si la URL viene de zernio.com, adjuntamos la API Key de Zernio
+            if "zernio.com" in payload.image_url and api_key_zernio:
+                headers["Authorization"] = f"Bearer {api_key_zernio}"
+
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                resp = await client.get(payload.image_url, headers=headers, timeout=15.0)
+                
+                if resp.status_code == 200:
+                    img = Image.open(io.BytesIO(resp.content))
+                    contents.append(img)
+                else:
+                    print(f"⚠️ No se pudo descargar la imagen (Status {resp.status_code}): {resp.text}")
+        except Exception as e:
+            print(f"⚠️ Error intentando descargar la imagen: {str(e)}")
+            # Si hay texto disponible, no frenamos el proceso; continuamos con el texto
+
+    # Si no hay imagen cargada ni texto, lanzamos error limpio
+    if not contents and not payload.text_content:
+        raise HTTPException(status_code=400, detail="No se proporcionó imagen válida ni texto para analizar.")
+
+    # 3. Prompt para Gemini 2.5 Flash
+    prompt = """
+    Analiza la información proporcionada (texto y/o imagen de afiche/flyer) y extrae los datos de los viajes.
+    Devuelve ÚNICAMENTE un objeto JSON válido con la siguiente estructura:
+    {
+      "destino": "Nombre del destino o ciudad",
+      "fecha_salida": "Fecha o mes de salida",
+      "precio": "Precio con moneda",
+      "cupos": 10,
+      "descripcion": "Resumen breve de lo que incluye",
+      "contacto": "Teléfono o email de contacto"
+    }
+    """
+
+    texto_final = f"{prompt}\n\nTexto recibido del mensaje:\n{payload.text_content or 'Sin texto acompañante'}"
+    contents.append(texto_final)
+
+    # 4. Invocación a Gemini 2.5 Flash
     try:
-        img_response = requests.get(payload.image_url)
-        if img_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="No se pudo descargar la imagen")
-
-        imagen_optimizada = optimizar_flyer_para_vision(img_response.content, max_size=1024)
-
-        image_part = types.Part.from_bytes(
-            data=imagen_optimizada, 
-            mime_type="image/jpeg"
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=["Analiza este flyer de viaje y extrae la información requerida de forma estructurada.", image_part],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=OfertaViaje,
-            ),
-        )
-        return OfertaViaje.model_validate_json(response.text)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = model.generate_content(contents)
+        return {"ok": True, "datos_extraidos": response.text}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en extracción Gemini: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error analizando con Gemini: {str(e)}")
 
 # 2. Asistente Conversacional RAG
 @app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
