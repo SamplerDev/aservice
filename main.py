@@ -113,14 +113,19 @@ async def verify_internal_key(api_key: str = Security(api_key_header)):
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
 class OfertaViaje(BaseModel):
-    destino: str = Field(description="Ciudad, región o país principal del viaje")
-    fecha_salida: str = Field(description="Fecha en formato YYYY-MM-DD o aproximada/mes")
-    descripcion: str = Field(description="Resumen de inclusiones, estadía, transporte y precio")
-    contacto: Optional[str] = Field(None, description="Teléfono o medio de contacto extraído")
-    cupos: Optional[int] = Field(1, description="Cantidad estimada de cupos o lugares disponibles mencionados")
+    destino: str = Field(description="Ciudad o región principal del viaje (ej: 'Bariloche', 'Mar del Plata')")
+    fecha_salida: str = Field(description="Fecha o texto exacto de salida tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años.")
+    duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
+    hotel: Optional[str] = Field(None, description="Nombre del hotel o hospedaje (ej: 'Hotel Quime Quipan Inn')")
+    regimen_comida: Optional[str] = Field(None, description="Tipo de comida (ej: 'Desayuno', 'Media Pensión', 'Pensión Completa')")
+    inclusiones: Optional[str] = Field(None, description="Servicios adicionales incluidos (ej: 'Traslado, Alojamiento, Coordinador')")
+    precio_promo: Optional[float] = Field(None, description="Precio total final o promocional publicado (ej: 249990)")
+    promocion: Optional[str] = Field(None, description="Texto o regla de la promoción si figura (ej: 'Viajan 3 Pagan 2')")
+    contacto: Optional[str] = Field(None, description="Teléfono o medio de contacto extraído del afiche")
+    cupos: Optional[int] = Field(1, description="Cantidad estimada de cupos o plazas si se mencionan")
 
 class ListaOfertasViaje(BaseModel):
-    ofertas: List[OfertaViaje] = Field(description="Lista de todas las ofertas de viaje o paquetes encontrados")
+    ofertas: List[OfertaViaje] = Field(description="Lista de todas las ofertas individuales detectadas")
 
 class FlyerPayload(BaseModel):
     phone_number: str
@@ -224,10 +229,13 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             raise Exception("No se proporcionó información ni imagen para procesar.")
 
         system_instruction = (
-            "Analiza minuciosamente la información proporcionada (texto e/o imagen). "
-            "Es común que un afiche contenga MÚLTIPLES viajes, destinos o promociones distintas. "
-            "Extrae TODAS y cada una de las ofertas de viaje individuales que identifiques."
-        )
+    "Eres un extractor estricto de datos de afiches publicitarios de viajes.\n"
+    "REGLAS OBLIGATORIAS:\n"
+    "1. Extrae los datos LITERALE MENTE como figuran en la imagen o texto.\n"
+    "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche.\n"
+    "3. NO realices cálculos matemáticos ni divisiones de precios por persona por tu cuenta.\n"
+    "4. Si un afiche contiene múltiples destinos o fechas distintas, extráelas como ofertas separadas."
+)
 
         response = await generate_with_fallback(
             contents=contents,
