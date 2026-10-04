@@ -1,4 +1,5 @@
 import os
+import secrets
 import io
 import time
 import base64
@@ -9,12 +10,14 @@ import httpx
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from PIL import Image
-from fastapi import FastAPI, HTTPException, Security, Depends, status, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Security, Depends, status, Request, BackgroundTasks, Header
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+
 
 # ------------------------------------------------------------------
 # ENTORNO Y CONFIGURACIÓN
@@ -25,6 +28,7 @@ MODELS_FALLBACK = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 NODE_CALLBACK_URL = os.getenv("NODE_CALLBACK_URL")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 
 # ------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
@@ -82,12 +86,39 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = FastAPI(title="AI Agentic Microservice (Gemini)")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://slateblue-horse-642737.hostingersite.com"],
+    allow_credentials=True,
+    allow_methods=["POST"],
+    allow_headers=["X-API-Key", "Content-Type"],
+)
+
+# ------------------------------------------------------------------
+# MIDDLEWARE Y SEGURIDAD UNIFICADA
+# ------------------------------------------------------------------
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
-# ------------------------------------------------------------------
-# MIDDLEWARE Y SEGURIDAD
-# ------------------------------------------------------------------
+async def verify_internal_key(api_key: str = Security(api_key_header)):
+    if not INTERNAL_API_KEY or not api_key:
+        log.error("AUTH_FAIL", "Intento de acceso rechazado: X-API-Key ausente.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acceso no autorizado: X-API-Key ausente"
+        )
+    
+    # Comparación en tiempo constante (protección contra timing attacks)
+    if not secrets.compare_digest(api_key, INTERNAL_API_KEY):
+        log.error("AUTH_FAIL", "Intento de acceso rechazado: X-API-Key inválida.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acceso no autorizado: X-API-Key inválida"
+        )
+        
+    log.success("AUTH_OK", "Autenticación interna validada correctamente.")
+    return api_key
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
@@ -99,15 +130,6 @@ async def log_requests(request: Request, call_next):
     
     log.info("HTTP_OUT", f"<-- {request.method} {request.url.path} {response.status_code} [{duration}ms]")
     return response
-
-async def verify_internal_key(api_key: str = Security(api_key_header)):
-    if not INTERNAL_API_KEY or api_key != INTERNAL_API_KEY:
-        log.error("AUTH_FAIL", "Intento de acceso rechazado: X-API-Key inválida o ausente.")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Acceso no autorizado: X-API-Key inválida o ausente"
-        )
-    log.success("AUTH_OK", "Autenticación interna validada correctamente.")
 
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
@@ -181,7 +203,9 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
                     config_args["response_mime_type"] = "application/json"
                     config_args["response_schema"] = response_schema
 
-                response = client.models.generate_content(
+                # Ejecutar la llamada sincrónica en un hilo asíncrono para no bloquear el Event Loop
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
                     model=model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(**config_args)
@@ -207,9 +231,6 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
 # TAREA DE FONDO (ASYNC CALLBACK)
 # ------------------------------------------------------------------
 async def task_extract_flyer_and_notify(payload: FlyerPayload):
-    """
-    Procesa la imagen con Gemini en segundo plano y notifica a Node.js cuando termina.
-    """
     try:
         log.info("GEMINI_TASK", f"Iniciando procesamiento de afiche para {payload.phone_number}...")
         contents = []
@@ -229,13 +250,13 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             raise Exception("No se proporcionó información ni imagen para procesar.")
 
         system_instruction = (
-    "Eres un extractor estricto de datos de afiches publicitarios de viajes.\n"
-    "REGLAS OBLIGATORIAS:\n"
-    "1. Extrae los datos LITERALE MENTE como figuran en la imagen o texto.\n"
-    "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche.\n"
-    "3. NO realices cálculos matemáticos ni divisiones de precios por persona por tu cuenta.\n"
-    "4. Si un afiche contiene múltiples destinos o fechas distintas, extráelas como ofertas separadas."
-)
+            "Eres un extractor estricto de datos de afiches publicitarios de viajes.\n"
+            "REGLAS OBLIGATORIAS:\n"
+            "1. Extrae los datos LITERALMENTE como figuran en la imagen o texto.\n"
+            "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche.\n"
+            "3. NO realices cálculos matemáticos ni divisiones de precios por persona por tu cuenta.\n"
+            "4. Si un afiche contiene múltiples destinos o fechas distintas, extráelas como ofertas separadas."
+        )
 
         response = await generate_with_fallback(
             contents=contents,
@@ -256,6 +277,7 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                         "extractedData": datos_dict
                     },
                     headers={
+                        "X-API-Key": INTERNAL_API_KEY,
                         "Authorization": f"Bearer {INTERNAL_API_KEY}",
                         "Content-Type": "application/json"
                     }
@@ -274,7 +296,10 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                             "error": True,
                             "message": f"Error procesando la imagen: {str(e)}"
                         },
-                        headers={"Authorization": f"Bearer {INTERNAL_API_KEY}"}
+                        headers={
+                            "X-API-Key": INTERNAL_API_KEY,
+                            "Authorization": f"Bearer {INTERNAL_API_KEY}"
+                        }
                     )
             except Exception as notify_err:
                 log.error("CALLBACK_FAIL", f"No se pudo notificar el error a Node.js: {str(notify_err)}")
@@ -287,22 +312,18 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
 async def health_check():
     return {"status": "OK", "service": "Python AI Microservice (Gemini)"}
 
-# 1. Extracción Multimodal Asincrónica (Background Task)
 @app.post("/agent/extract-flyer", dependencies=[Depends(verify_internal_key)])
 async def extract_flyer(payload: FlyerPayload, background_tasks: BackgroundTasks):
     log.info("FLYER_REQ", f"Petición recibida para {payload.phone_number}. Programando tarea en segundo plano...")
     
-    # Programar la tarea asincrónica
     background_tasks.add_task(task_extract_flyer_and_notify, payload)
     
-    # Responder a Node.js inmediatamente (menos de 100ms)
     return {
         "ok": True,
         "status": "processing",
         "message": "Afiche recibido correctamente. Procesando en segundo plano."
     }
 
-# 2. Asistente Conversacional RAG
 @app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
 async def chat_agent(payload: ChatRequest):
     log.info("CHAT_REQ", f"Consulta recibida: '{payload.user_message}'")
@@ -328,13 +349,11 @@ async def chat_agent(payload: ChatRequest):
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=payload.user_message)]))
 
         start_gemini = time.time()
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
+        
+        # Ejecución asíncrona no bloqueante
+        response = await generate_with_fallback(
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.3
-            )
+            system_instruction=system_instruction
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
@@ -346,7 +365,6 @@ async def chat_agent(payload: ChatRequest):
         log.error("CHAT_ERR", f"Error en Chat Gemini: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error en Chat Gemini: {str(e)}")
 
-# 3. Parser de Confirmación Humana
 @app.post("/agent/confirm", response_model=ConfirmResult, dependencies=[Depends(verify_internal_key)])
 async def parse_admin_confirmation(payload: ConfirmRequest):
     log.info("CONFIRM_REQ", f"Evaluando respuesta de admin: '{payload.admin_message}'")
@@ -355,13 +373,11 @@ async def parse_admin_confirmation(payload: ConfirmRequest):
         prompt = f"Determina si el siguiente mensaje del administrador autoriza la publicación ('APROBAR') o la rechaza ('RECHAZAR'):\n'{payload.admin_message}'"
         
         start_gemini = time.time()
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
+        
+        response = await generate_with_fallback(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ConfirmResult,
-            )
+            system_instruction="Eres un evaluador de intenciones de aprobación.",
+            response_schema=ConfirmResult
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
