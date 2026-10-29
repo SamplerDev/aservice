@@ -110,7 +110,7 @@ async def verify_internal_key(api_key: str = Security(api_key_header)):
     
     # Comparación en tiempo constante (protección contra timing attacks)
     if not secrets.compare_digest(api_key, INTERNAL_API_KEY):
-        log.error("AUTH_FAIL", "Intento de acceso rechazado: X-API-Key inválida.")
+        log.error("AUTH_FAIL", "Intento de acceso rechazado: X-API-Key inválida. ")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Acceso no autorizado: X-API-Key inválida"
