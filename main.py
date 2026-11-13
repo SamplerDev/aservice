@@ -72,6 +72,13 @@ class Logger:
 
 log = Logger()
 
+def mask_phone(phone: Optional[str]) -> str:
+    """Enmascara un teléfono en logs, dejando solo los últimos 4 dígitos."""
+    if not phone:
+        return "?"
+    s = str(phone)
+    return f"***{s[-4:]}" if len(s) > 4 else "***"
+
 log.info("STARTUP", "Iniciando AI Agent Microservice (Gemini)...")
 log.info("ENV_CHECK", "Estado de variables de entorno:", {
     "INTERNAL_API_KEY": "✅ Configurada" if INTERNAL_API_KEY else "❌ FALTANTE",
@@ -232,7 +239,7 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
 # ------------------------------------------------------------------
 async def task_extract_flyer_and_notify(payload: FlyerPayload):
     try:
-        log.info("GEMINI_TASK", f"Iniciando procesamiento de afiche para {payload.phone_number}...")
+        log.info("GEMINI_TASK", f"Iniciando procesamiento de afiche para {mask_phone(payload.phone_number)}...")
         contents = []
 
         if payload.image_base64:
@@ -265,7 +272,7 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
         )
 
         datos_dict = json.loads(response.text)
-        log.success("GEMINI_DONE", f"Extracción completada con éxito para {payload.phone_number}")
+        log.success("GEMINI_DONE", f"Extracción completada con éxito para {mask_phone(payload.phone_number)}")
 
         # Enviar el resultado de vuelta a Node.js vía Webhook Callback
         if NODE_CALLBACK_URL:
@@ -314,7 +321,7 @@ async def health_check():
 
 @app.post("/agent/extract-flyer", dependencies=[Depends(verify_internal_key)])
 async def extract_flyer(payload: FlyerPayload, background_tasks: BackgroundTasks):
-    log.info("FLYER_REQ", f"Petición recibida para {payload.phone_number}. Programando tarea en segundo plano...")
+    log.info("FLYER_REQ", f"Petición recibida para {mask_phone(payload.phone_number)}. Programando tarea en segundo plano...")
     
     background_tasks.add_task(task_extract_flyer_and_notify, payload)
     
@@ -326,7 +333,8 @@ async def extract_flyer(payload: FlyerPayload, background_tasks: BackgroundTasks
 
 @app.post("/agent/chat", dependencies=[Depends(verify_internal_key)])
 async def chat_agent(payload: ChatRequest):
-    log.info("CHAT_REQ", f"Consulta recibida: '{payload.user_message}'")
+    # No se loguea el contenido del mensaje del cliente, solo su longitud.
+    log.info("CHAT_REQ", f"Consulta recibida ({len(payload.user_message)} caracteres)")
 
     try:
         system_instruction = f"""
@@ -357,7 +365,7 @@ async def chat_agent(payload: ChatRequest):
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
-        log.success("CHAT_RES", f"Respuesta generada en {duration}ms:", response.text)
+        log.success("CHAT_RES", f"Respuesta generada en {duration}ms ({len(response.text)} caracteres)")
 
         return {"response": response.text}
 
@@ -367,7 +375,8 @@ async def chat_agent(payload: ChatRequest):
 
 @app.post("/agent/confirm", response_model=ConfirmResult, dependencies=[Depends(verify_internal_key)])
 async def parse_admin_confirmation(payload: ConfirmRequest):
-    log.info("CONFIRM_REQ", f"Evaluando respuesta de admin: '{payload.admin_message}'")
+    # No se loguea el contenido del mensaje del admin, solo su longitud.
+    log.info("CONFIRM_REQ", f"Evaluando respuesta de admin ({len(payload.admin_message)} caracteres)")
 
     try:
         prompt = f"Determina si el siguiente mensaje del administrador autoriza la publicación ('APROBAR') o la rechaza ('RECHAZAR'):\n'{payload.admin_message}'"
@@ -381,7 +390,7 @@ async def parse_admin_confirmation(payload: ConfirmRequest):
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
-        log.success("CONFIRM_RES", f"Decisión interpretada en {duration}ms:", response.text)
+        log.success("CONFIRM_RES", f"Decisión interpretada en {duration}ms")
 
         return ConfirmResult.model_validate_json(response.text)
 
