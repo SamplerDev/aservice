@@ -161,6 +161,10 @@ class FlyerPayload(BaseModel):
     text_content: Optional[str] = ""
     image_base64: Optional[str] = None
     mime_type: Optional[str] = "image/jpeg"
+    # Id de la fila en 'fuentes_extraccion' (Node ya la creó antes de llamar
+    # acá). Python no la usa para nada, solo la devuelve en el callback para
+    # que Node pueda vincular cada oferta encontrada a su fuente original.
+    fuente_id: Optional[int] = None
 
 class ChatMessage(BaseModel):
     role: str  # "user" o "model"
@@ -281,7 +285,8 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                     NODE_CALLBACK_URL,
                     json={
                         "phoneNumber": payload.phone_number,
-                        "extractedData": datos_dict
+                        "extractedData": datos_dict,
+                        "fuenteId": payload.fuente_id
                     },
                     headers={
                         "X-API-Key": INTERNAL_API_KEY,
