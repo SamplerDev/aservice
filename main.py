@@ -143,7 +143,7 @@ async def log_requests(request: Request, call_next):
 # ------------------------------------------------------------------
 class OfertaViaje(BaseModel):
     destino: str = Field(description="Ciudad o región principal del viaje (ej: 'Bariloche', 'Mar del Plata')")
-    fecha_salida: str = Field(description="Fecha o texto exacto de salida tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años.")
+    fecha_salida: str = Field(description="UNA sola fecha de salida, tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años. Si el afiche lista varias fechas para este mismo destino, esta oferta representa SOLO una de ellas -- nunca una lista ni un rango de fechas acá.")
     duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
     hotel: Optional[str] = Field(None, description="Nombre del hotel o hospedaje (ej: 'Hotel Quime Quipan Inn')")
     regimen_comida: Optional[str] = Field(None, description="Tipo de comida (ej: 'Desayuno', 'Media Pensión', 'Pensión Completa')")
@@ -266,7 +266,13 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             "1. Extrae los datos LITERALMENTE como figuran en la imagen o texto.\n"
             "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche.\n"
             "3. NO realices cálculos matemáticos ni divisiones de precios por persona por tu cuenta.\n"
-            "4. Si un afiche contiene múltiples destinos o fechas distintas, extráelas como ofertas separadas."
+            "4. Si un afiche contiene múltiples destinos, extráelos como ofertas separadas.\n"
+            "5. Si para UN MISMO destino hay varias fechas de salida -- por ejemplo "
+            "'Salidas: 14, 17, 23, 26 y 29 de Noviembre' o 'Sale los martes y jueves' -- "
+            "generá UNA oferta separada POR CADA FECHA individual, repitiendo igual el "
+            "resto de los datos (hotel, precio, régimen, cupos, etc.) en cada una. "
+            "NUNCA pongas una lista ni un rango de fechas en fecha_salida: cada oferta "
+            "lleva una sola fecha."
         )
 
         response = await generate_with_fallback(
