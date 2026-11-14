@@ -7,6 +7,7 @@ import logging
 import json
 import asyncio
 import httpx
+from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from PIL import Image
@@ -187,6 +188,16 @@ class ConfirmResult(BaseModel):
 class ConfirmRequest(BaseModel):
     admin_message: str
 
+class IntentPayload(BaseModel):
+    user_message: str
+    destinos_conocidos: List[str] = []
+
+class IntentExtraido(BaseModel):
+    destino: Optional[str] = Field(None, description="Uno de los destinos de destinos_conocidos que coincide EXACTAMENTE con lo que pide el cliente, escrito igual que en esa lista. None si no menciona ninguno o si no coincide con ninguno conocido -- nunca inventes un destino que no esté en la lista.")
+    mes: Optional[int] = Field(None, description="Mes de salida que pide, del 1 al 12, si lo menciona explícita o relativamente (ej: 'el mes que viene', 'para fin de año', resolviendo sobre la fecha de hoy que se da en el prompt). None si no lo menciona.")
+    busca_promocion: bool = Field(False, description="True SOLO si el cliente pregunta específicamente por promociones, descuentos u ofertas especiales.")
+    consulta_especifica: bool = Field(..., description="True si el mensaje pregunta por algo concreto (destino, fecha, tipo de viaje, promoción). False si es un saludo genérico o una pregunta vaga sin ningún criterio identificable (ej: 'hola', '¿qué tienen?', 'quiero viajar').")
+
 # ------------------------------------------------------------------
 # FUNCIONES AUXILIARES Y GEMINI FALLBACK
 # ------------------------------------------------------------------
@@ -350,14 +361,30 @@ async def chat_agent(payload: ChatRequest):
     try:
         system_instruction = f"""
         Eres un asesor de viajes por WhatsApp atento y comercial.
-        
-        Tus reglas:
-        1. Responde ÚNICAMENTE basándote en este catálogo de viajes disponibles que TIENEN STOCK:
+
+        Tenés acceso a este catálogo completo de viajes disponibles con stock
+        (es tu referencia interna, NO se lo muestres ni lo resumas completo
+        al cliente de entrada):
         {payload.travel_catalog}
-        
-        2. Menciona claramente el destino, fecha, detalles y si quedan POCOS cupos (menciona los cupos si son < 3).
-        3. Si el cliente pregunta por un destino o fecha que NO figura en este catálogo, infórmale amablemente que las plazas para ese viaje están agotadas o que no hay salidas disponibles por el momento, e insítalo a consultar por las otras opciones activas.
-        4. Mantén respuestas concisas, amables y adecuadas para un chat de WhatsApp.
+
+        Tus reglas:
+        1. Respondé ÚNICAMENTE basándote en este catálogo.
+        2. NO enumeres ni resumas el catálogo completo salvo que el cliente
+           lo pida explícitamente. Si el mensaje es genérico (ej: "hola",
+           "¿qué viajes tienen?", sin especificar destino/fecha/tipo de
+           viaje), NO listes opciones: preguntale primero qué destino, fecha
+           o tipo de viaje le interesa, para poder responder algo puntual en
+           vez de mandarle todo el catálogo de una.
+        3. Cuando el cliente sí pregunte por algo puntual, mencioná
+           claramente el destino, fecha, detalles y si quedan POCOS cupos
+           (mencioná los cupos si son < 3). Si hay varias opciones que
+           coinciden con lo que pidió, está bien mostrar esas pocas.
+        4. Si el cliente pregunta por un destino o fecha que NO figura en el
+           catálogo, informale amablemente que no hay salidas disponibles
+           por el momento para eso, y preguntale qué otro destino o fecha le
+           interesaría para poder ofrecerle alternativas reales.
+        5. Mantené las respuestas concisas, amables y adecuadas para un chat
+           de WhatsApp.
         """
 
         contents = []
@@ -408,3 +435,44 @@ async def parse_admin_confirmation(payload: ConfirmRequest):
     except Exception as e:
         log.error("CONFIRM_ERR", f"Error en Confirmación Gemini: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error en Confirmación Gemini: {str(e)}")
+
+@app.post("/agent/extract-intent", response_model=IntentExtraido, dependencies=[Depends(verify_internal_key)])
+async def extract_intent(payload: IntentPayload):
+    # No se loguea el mensaje del cliente, solo su longitud. Llamado liviano
+    # (sin catálogo completo) para decidir qué filtrar antes del chat real --
+    # ver ahorro de tokens / reducción de falsos negativos en la auditoría.
+    log.info("INTENT_REQ", f"Extrayendo intención ({len(payload.user_message)} caracteres, {len(payload.destinos_conocidos)} destinos conocidos)")
+
+    try:
+        hoy = datetime.now().strftime("%Y-%m-%d (%A)")
+        destinos_texto = ", ".join(payload.destinos_conocidos) if payload.destinos_conocidos else "(no hay destinos con salidas activas en este momento)"
+
+        prompt = (
+            f"Hoy es {hoy}. El cliente escribió: \"{payload.user_message}\"\n\n"
+            f"Destinos con salidas activas en este momento: {destinos_texto}\n\n"
+            "Extraé la intención de este mensaje puntual."
+        )
+
+        start_gemini = time.time()
+
+        response = await generate_with_fallback(
+            contents=prompt,
+            system_instruction=(
+                "Extraés la intención de mensajes de clientes de WhatsApp para una "
+                "agencia de viajes, para poder buscarles ofertas puntuales en vez de "
+                "mostrarles todo el catálogo. Sé conservador: si no estás seguro de "
+                "que el destino mencionado coincida con uno de los conocidos, dejalo "
+                "en None en vez de adivinar -- es preferible preguntar de nuevo que "
+                "decirle al cliente que algo no existe cuando sí existe."
+            ),
+            response_schema=IntentExtraido
+        )
+
+        duration = round((time.time() - start_gemini) * 1000, 2)
+        log.success("INTENT_RES", f"Intención extraída en {duration}ms")
+
+        return IntentExtraido.model_validate_json(response.text)
+
+    except Exception as e:
+        log.error("INTENT_ERR", f"Error extrayendo intención: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error extrayendo intención: {str(e)}")
