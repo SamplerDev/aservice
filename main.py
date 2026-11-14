@@ -143,14 +143,14 @@ async def log_requests(request: Request, call_next):
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
 class RegionViaje(str, Enum):
-    PATAGONIA_ARG = "Patagonia Argentina"
-    LITORAL_ARG = "Litoral Argentino"
+    # Las 6 regiones geográficas oficiales de Argentina.
+    NOROESTE_ARG = "Noroeste (NOA)"
+    NORESTE_ARG = "Noreste (NEA)"
     CUYO = "Cuyo"
-    NOROESTE_ARG = "Noroeste Argentino"
-    NORESTE_ARG = "Noreste Argentino"
-    CENTRO_ARG = "Centro Argentino"
-    BUENOS_AIRES = "Buenos Aires / AMBA"
-    COSTA_ATLANTICA_ARG = "Costa Atlántica Argentina"
+    PAMPEANA = "Pampeana"
+    PATAGONIA_ARG = "Patagonia"
+    CABA = "CABA"
+    # Internacional, por continente/subregión.
     CARIBE = "Caribe"
     CENTROAMERICA = "Centroamérica"
     SUDAMERICA_RESTO = "Sudamérica (resto)"
@@ -167,16 +167,20 @@ class OfertaViaje(BaseModel):
     region: RegionViaje = Field(description=(
         "Zona geográfica del destino, para poder sugerir alternativas "
         "cercanas cuando no hay stock de lo que se pide. Si el destino es "
-        "una ciudad/provincia de Argentina, usá la subregión argentina que "
-        "le corresponde (ej: Bariloche/Villa La Angostura -> 'Patagonia "
-        "Argentina'; Mar del Plata/Pinamar -> 'Costa Atlántica Argentina'; "
-        "Mendoza/San Juan -> 'Cuyo'; Salta/Jujuy -> 'Noroeste Argentino'; "
-        "Misiones/Corrientes -> 'Noreste Argentino'; CABA/GBA -> 'Buenos "
-        "Aires / AMBA'). Si es un destino internacional, usá el continente "
-        "o subregión que corresponda (ej: Punta Cana/Cancún -> 'Caribe'; "
-        "Brasil -> 'Sudamérica (resto)'; España/Italia -> 'Europa'). Usá "
-        "'Otro / No identificado' SOLO si el destino no encaja claramente "
-        "en ninguna de estas categorías."
+        "argentino, usá la región geográfica oficial que le corresponde: "
+        "'Noroeste (NOA)' (Jujuy, Salta, Tucumán, Catamarca, La Rioja, "
+        "Santiago del Estero), 'Noreste (NEA)' (Misiones, Corrientes, "
+        "Chaco, Formosa -- incluye Iguazú), 'Cuyo' (Mendoza, San Juan, San "
+        "Luis), 'Pampeana' (provincia de Buenos Aires incluida su costa "
+        "atlántica como Mar del Plata/Pinamar, Córdoba, Santa Fe, Entre "
+        "Ríos, La Pampa), 'Patagonia' (Neuquén, Río Negro, Chubut, Santa "
+        "Cruz, Tierra del Fuego -- incluye Bariloche, Ushuaia, El "
+        "Calafate), o 'CABA' SOLO para la Ciudad Autónoma de Buenos Aires "
+        "(no la provincia). Si es un destino internacional, usá el "
+        "continente o subregión que corresponda (ej: Punta Cana/Cancún -> "
+        "'Caribe'; Brasil -> 'Sudamérica (resto)'; España/Italia -> "
+        "'Europa'). Usá 'Otro / No identificado' SOLO si el destino no "
+        "encaja claramente en ninguna de estas categorías."
     ))
     fecha_salida: str = Field(description="UNA sola fecha de salida, tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años. Si el afiche lista varias fechas para este mismo destino, esta oferta representa SOLO una de ellas -- nunca una lista ni un rango de fechas acá.")
     duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
