@@ -142,8 +142,42 @@ async def log_requests(request: Request, call_next):
 # ------------------------------------------------------------------
 # ESQUEMAS PYDANTIC (Structured Outputs)
 # ------------------------------------------------------------------
+class RegionViaje(str, Enum):
+    PATAGONIA_ARG = "Patagonia Argentina"
+    LITORAL_ARG = "Litoral Argentino"
+    CUYO = "Cuyo"
+    NOROESTE_ARG = "Noroeste Argentino"
+    NORESTE_ARG = "Noreste Argentino"
+    CENTRO_ARG = "Centro Argentino"
+    BUENOS_AIRES = "Buenos Aires / AMBA"
+    COSTA_ATLANTICA_ARG = "Costa Atlántica Argentina"
+    CARIBE = "Caribe"
+    CENTROAMERICA = "Centroamérica"
+    SUDAMERICA_RESTO = "Sudamérica (resto)"
+    NORTEAMERICA = "Norteamérica"
+    EUROPA = "Europa"
+    ASIA = "Asia"
+    OCEANIA = "Oceanía"
+    MEDIO_ORIENTE = "Medio Oriente"
+    AFRICA = "África"
+    OTRO = "Otro / No identificado"
+
 class OfertaViaje(BaseModel):
     destino: str = Field(description="Ciudad o región principal del viaje (ej: 'Bariloche', 'Mar del Plata')")
+    region: RegionViaje = Field(description=(
+        "Zona geográfica del destino, para poder sugerir alternativas "
+        "cercanas cuando no hay stock de lo que se pide. Si el destino es "
+        "una ciudad/provincia de Argentina, usá la subregión argentina que "
+        "le corresponde (ej: Bariloche/Villa La Angostura -> 'Patagonia "
+        "Argentina'; Mar del Plata/Pinamar -> 'Costa Atlántica Argentina'; "
+        "Mendoza/San Juan -> 'Cuyo'; Salta/Jujuy -> 'Noroeste Argentino'; "
+        "Misiones/Corrientes -> 'Noreste Argentino'; CABA/GBA -> 'Buenos "
+        "Aires / AMBA'). Si es un destino internacional, usá el continente "
+        "o subregión que corresponda (ej: Punta Cana/Cancún -> 'Caribe'; "
+        "Brasil -> 'Sudamérica (resto)'; España/Italia -> 'Europa'). Usá "
+        "'Otro / No identificado' SOLO si el destino no encaja claramente "
+        "en ninguna de estas categorías."
+    ))
     fecha_salida: str = Field(description="UNA sola fecha de salida, tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años. Si el afiche lista varias fechas para este mismo destino, esta oferta representa SOLO una de ellas -- nunca una lista ni un rango de fechas acá.")
     duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
     hotel: Optional[str] = Field(None, description="Nombre del hotel o hospedaje (ej: 'Hotel Quime Quipan Inn')")
@@ -174,6 +208,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     user_message: str
     travel_catalog: List[dict]
+    busqueda_sin_resultados: Optional[dict] = None
     history: Optional[List[ChatMessage]] = []
 
 class ConfirmAction(str, Enum):
@@ -283,7 +318,11 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             "generá UNA oferta separada POR CADA FECHA individual, repitiendo igual el "
             "resto de los datos (hotel, precio, régimen, cupos, etc.) en cada una. "
             "NUNCA pongas una lista ni un rango de fechas en fecha_salida: cada oferta "
-            "lleva una sola fecha."
+            "lleva una sola fecha.\n"
+            "6. Clasificá region según la definición del campo -- es para poder sugerir "
+            "destinos cercanos cuando no haya stock exacto de lo pedido, así que tiene "
+            "que ser consistente entre afiches (el mismo destino siempre a la misma "
+            "región)."
         )
 
         response = await generate_with_fallback(
@@ -359,6 +398,34 @@ async def chat_agent(payload: ChatRequest):
     log.info("CHAT_REQ", f"Consulta recibida ({len(payload.user_message)} caracteres)")
 
     try:
+        instruccion_sin_match = ""
+        if payload.busqueda_sin_resultados:
+            busqueda = payload.busqueda_sin_resultados
+            region_sugerida = busqueda.get("regionSugerida") if isinstance(busqueda, dict) else None
+            pista_region = (
+                f" El catálogo de arriba ya viene limitado a la región "
+                f"'{region_sugerida}' (la misma del destino que pidió), así que "
+                f"elegí la alternativa directamente de ahí."
+                if region_sugerida else
+                " No hay otro destino en la misma región, así que el catálogo de "
+                "arriba es el completo -- elegí la alternativa que tenga la fecha "
+                "de salida más próxima a la que pidió, de cualquier destino."
+            )
+            instruccion_sin_match = f"""
+
+        ATENCIÓN -- caso especial de esta consulta puntual: el cliente pidió
+        algo específico ({busqueda}) y NO hay ninguna salida activa que
+        coincida con eso exactamente.{pista_region}
+        Tu tarea en este mensaje es:
+        a) Decirle brevemente que no hay disponibilidad exacta para lo que
+           pidió.
+        b) Sugerirle proactivamente 1-3 alternativas puntuales que SÍ estén
+           en el catálogo de arriba -- nunca algo que no figure literalmente
+           ahí.
+        c) No enumeres el catálogo completo, mencioná solo esas alternativas,
+           como haría un vendedor atento.
+        """
+
         system_instruction = f"""
         Eres un asesor de viajes por WhatsApp atento y comercial.
 
@@ -385,6 +452,7 @@ async def chat_agent(payload: ChatRequest):
            interesaría para poder ofrecerle alternativas reales.
         5. Mantené las respuestas concisas, amables y adecuadas para un chat
            de WhatsApp.
+        {instruccion_sin_match}
         """
 
         contents = []
