@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # ------------------------------------------------------------------
 load_dotenv()
 
-MODELS_FALLBACK = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+MODELS_FALLBACK = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"]
 NODE_CALLBACK_URL = os.getenv("NODE_CALLBACK_URL")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
