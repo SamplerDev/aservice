@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # ------------------------------------------------------------------
 load_dotenv()
 
-MODELS_FALLBACK = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]
+MODELS_FALLBACK = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
 NODE_CALLBACK_URL = os.getenv("NODE_CALLBACK_URL")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -286,7 +286,13 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
                 else:
                     break
                     
-    raise Exception(f"Servicios de Google saturados. Último error: {str(last_error)}")
+    # "Saturados" solo si el último intento fue justamente eso (503/429) --
+    # si fue un 404 (modelo retirado/renombrado por Google) u otro error, el
+    # mensaje anterior confundía el diagnóstico (parecía un problema de
+    # carga cuando en realidad era un modelo que ya no existe).
+    ultimo_str = str(last_error)
+    motivo = "Servicios de Google saturados" if ("503" in ultimo_str or "429" in ultimo_str) else "No se pudo completar con ningún modelo de la lista de fallback"
+    raise Exception(f"{motivo}. Último error: {ultimo_str}")
 
 # ------------------------------------------------------------------
 # TAREA DE FONDO (ASYNC CALLBACK)
