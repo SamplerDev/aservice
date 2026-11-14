@@ -232,7 +232,7 @@ class IntentPayload(BaseModel):
     destinos_conocidos: List[str] = []
 
 class IntentExtraido(BaseModel):
-    destino: Optional[str] = Field(None, description="Uno de los destinos de destinos_conocidos que coincide EXACTAMENTE con lo que pide el cliente, escrito igual que en esa lista. None si no menciona ninguno o si no coincide con ninguno conocido -- nunca inventes un destino que no esté en la lista.")
+    destino: Optional[str] = Field(None, description="El lugar/destino que pide el cliente. Si coincide con uno de destinos_conocidos, escribilo EXACTAMENTE igual que en esa lista (para poder filtrar el catálogo). Si el cliente pide un lugar real y concreto que NO está en destinos_conocidos (ej. pregunta por una ciudad/provincia/país que la agencia no tiene activa ahora), escribí igual el nombre de ese lugar tal como lo entendiste -- NO lo pongas en None solo porque no está en la lista, hace falta igual para poder sugerirle algo cercano. Usá None únicamente si el cliente no menciona ningún lugar geográfico concreto (ej. 'hola', '¿qué tienen?').")
     mes: Optional[int] = Field(None, description="Mes de salida que pide, del 1 al 12, si lo menciona explícita o relativamente (ej: 'el mes que viene', 'para fin de año', resolviendo sobre la fecha de hoy que se da en el prompt). None si no lo menciona.")
     busca_promocion: bool = Field(False, description="True SOLO si el cliente pregunta específicamente por promociones, descuentos u ofertas especiales.")
     consulta_especifica: bool = Field(..., description="True si el mensaje pregunta por algo concreto (destino, fecha, tipo de viaje, promoción). False si es un saludo genérico o una pregunta vaga sin ningún criterio identificable (ej: 'hola', '¿qué tienen?', 'quiero viajar').")
