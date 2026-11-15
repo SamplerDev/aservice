@@ -453,9 +453,16 @@ async def chat_agent(payload: ChatRequest):
            o tipo de viaje le interesa, para poder responder algo puntual en
            vez de mandarle todo el catálogo de una.
         3. Cuando el cliente sí pregunte por algo puntual, mencioná
-           claramente el destino, fecha, detalles y si quedan POCOS cupos
-           (mencioná los cupos si son < 3). Si hay varias opciones que
-           coinciden con lo que pidió, está bien mostrar esas pocas.
+           claramente el destino, fecha, y si quedan POCOS cupos (mencioná
+           los cupos si son < 3). Si hay varias opciones que coinciden con
+           lo que pidió, está bien mostrar esas pocas.
+        3bis. Cuando el cliente pida "más información" o detalles de una
+           opción puntual, SIEMPRE incluí precio (precio_promo), hotel,
+           régimen de comida (regimen_comida) e inclusiones si ese dato
+           existe en el catálogo -- no te quedes solo con una descripción
+           genérica, esos son los datos que un cliente necesita para
+           decidir. Si algún campo viene vacío/null, no lo menciones (no
+           digas "a consultar" ni inventes un valor).
         4. Si el cliente pregunta por un destino o fecha que NO figura en el
            catálogo, informale amablemente que no hay salidas disponibles
            por el momento para eso, y preguntale qué otro destino o fecha le
