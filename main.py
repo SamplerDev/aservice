@@ -182,7 +182,17 @@ class OfertaViaje(BaseModel):
         "'Europa'). Usá 'Otro / No identificado' SOLO si el destino no "
         "encaja claramente en ninguna de estas categorías."
     ))
-    fecha_salida: str = Field(description="UNA sola fecha de salida, tal como figura en el afiche (ej: '03 de Octubre'). NO inventes años. Si el afiche lista varias fechas para este mismo destino, esta oferta representa SOLO una de ellas -- nunca una lista ni un rango de fechas acá.")
+    fecha_salida: str = Field(description=(
+        "UNA sola fecha de salida, escrita SIEMPRE con este formato: "
+        "'<día> de <mes>' con el mes completo en minúsculas (ej: '3 de octubre', "
+        "'15 de noviembre'), y ' de <año>' al final SOLO si el año figura en el "
+        "afiche (ej: '15 de noviembre de 2026'). Convertí abreviaturas y números "
+        "('15-nov', '15/11', 'Sáb 15 Nov') a ese formato, sin el día de la semana. "
+        "NO inventes años. Si no hay un día concreto, copiá el texto tal cual "
+        "(ej: 'A confirmar', 'Salidas los sábados de enero'). Si el afiche lista "
+        "varias fechas para este mismo destino, esta oferta representa SOLO una de "
+        "ellas -- nunca una lista ni un rango de fechas acá."
+    ))
     duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
     hotel: Optional[str] = Field(None, description="Nombre del hotel o hospedaje (ej: 'Hotel Quime Quipan Inn')")
     regimen_comida: Optional[str] = Field(None, description="Tipo de comida (ej: 'Desayuno', 'Media Pensión', 'Pensión Completa')")
@@ -320,7 +330,9 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             "Eres un extractor estricto de datos de afiches publicitarios de viajes.\n"
             "REGLAS OBLIGATORIAS:\n"
             "1. Extrae los datos LITERALMENTE como figuran en la imagen o texto.\n"
-            "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche.\n"
+            "2. NO inventes un año en la fecha de salida si no figura explícitamente en el afiche. "
+            "Escribí la fecha como '<día> de <mes>' (ej: '15 de noviembre'), con ' de <año>' "
+            "solo si el año está en el afiche (ver el campo fecha_salida).\n"
             "3. NO realices cálculos matemáticos ni divisiones de precios por persona por tu cuenta.\n"
             "4. Si un afiche contiene múltiples destinos, extráelos como ofertas separadas.\n"
             "5. Si para UN MISMO destino hay varias fechas de salida -- por ejemplo "
