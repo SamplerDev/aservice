@@ -194,6 +194,15 @@ class OfertaViaje(BaseModel):
         "ellas -- nunca una lista ni un rango de fechas acá."
     ))
     duracion: Optional[str] = Field(None, description="Duración del viaje (ej: '6 Días / 3 Noches')")
+    duracion_dias: Optional[int] = Field(None, description=(
+        "Cantidad de DÍAS del viaje como número, tal como figura en el afiche "
+        "(ej: '6 Días / 3 Noches' -> 6). null si el afiche no dice los días."
+    ))
+    duracion_noches: Optional[int] = Field(None, description=(
+        "Cantidad de NOCHES (de alojamiento) como número, tal como figura en el afiche "
+        "(ej: '6 Días / 3 Noches' -> 3; '7 noches' -> 7). null si el afiche no dice las "
+        "noches. No la calcules a partir de los días."
+    ))
     hotel: Optional[str] = Field(None, description="Nombre del hotel o hospedaje (ej: 'Hotel Quime Quipan Inn')")
     regimen_comida: Optional[str] = Field(None, description="Tipo de comida (ej: 'Desayuno', 'Media Pensión', 'Pensión Completa')")
     inclusiones: Optional[str] = Field(None, description="Servicios adicionales incluidos (ej: 'Traslado, Alojamiento, Coordinador')")
@@ -375,7 +384,7 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                 log.info("CALLBACK_SENT", f"Resultado enviado a Node.js (Status: {res.status_code})")
 
     except Exception as e:
-        log.error("TASK_ERR", f"Error en la tarea de fondo de Gemini: {str(e)}")
+        log.error("TASK_ERR", f"Error en la tarea de fondo de Gemini: {type(e).__name__}: {e!r} (callback: {NODE_CALLBACK_URL})")
         if NODE_CALLBACK_URL:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client_http:
@@ -392,7 +401,7 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                         }
                     )
             except Exception as notify_err:
-                log.error("CALLBACK_FAIL", f"No se pudo notificar el error a Node.js: {str(notify_err)}")
+                log.error("CALLBACK_FAIL", f"No se pudo notificar el error a Node.js: {type(notify_err).__name__}: {notify_err!r} (callback: {NODE_CALLBACK_URL})")
 
 # ------------------------------------------------------------------
 # ENDPOINTS
