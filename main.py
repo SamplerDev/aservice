@@ -266,18 +266,40 @@ def optimizar_flyer_para_vision(imagen_bytes: bytes, max_size: int = 1024) -> Im
     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     return img
 
-async def generate_with_fallback(contents, system_instruction, response_schema=None):
+# Tiempo máximo que puede esperar cada llamado. Vercel corta la función a los
+# `maxDuration` segundos (vercel.json) y, si eso pasa, la tarea muere sin
+# avisarle nada a Node. Por eso cada intento lleva su propio timeout y nunca
+# se pasa del plazo total (`deadline`): así siempre queda tiempo para mandar el
+# aviso de error. Sin deadline (chat, intención, confirmación: Node espera la
+# respuesta hasta 60 s) se usan 50 s.
+PLAZO_SINCRONICO_S = 50
+POR_INTENTO_SINCRONICO_S = 25   # chat: un modelo colgado no se come los 50 s
+POR_INTENTO_FLYER_S = 90        # afiche: imagen + JSON largo, tarda más
+MINIMO_PARA_INTENTAR_S = 12  # Gemini rechaza timeouts de menos de 10 s
+
+async def generate_with_fallback(contents, system_instruction, response_schema=None, deadline=None, por_intento=None):
     last_error = None
-    
+    if deadline is None:
+        deadline = time.time() + PLAZO_SINCRONICO_S
+    if por_intento is None:
+        por_intento = POR_INTENTO_SINCRONICO_S
+
     for model_name in MODELS_FALLBACK:
         for attempt in range(2):
+            restante = deadline - time.time()
+            if restante < MINIMO_PARA_INTENTAR_S:
+                log.warn("GEMINI_SIN_TIEMPO", f"Quedan {restante:.0f}s: no se prueba {model_name}.")
+                ultimo = f" Último error: {str(last_error)[:200]}" if last_error else ""
+                raise Exception(f"Gemini tardó demasiado en responder (servicio saturado). Probá de nuevo en unos minutos.{ultimo}")
             try:
-                log.info("GEMINI_CALL", f"Invocando {model_name} (Intento {attempt + 1})...")
+                log.info("GEMINI_CALL", f"Invocando {model_name} (Intento {attempt + 1}, hasta {min(restante, por_intento):.0f}s)...")
                 start_time = time.time()
-                
+
                 config_args = {
                     "system_instruction": system_instruction,
-                    "temperature": 0.2
+                    "temperature": 0.2,
+                    # en milisegundos: si el modelo no contesta, se pasa al siguiente
+                    "http_options": types.HttpOptions(timeout=int(max(10, min(restante, por_intento)) * 1000))
                 }
                 if response_schema:
                     config_args["response_mime_type"] = "application/json"
@@ -300,7 +322,9 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
                 err_str = str(e)
                 log.warn("GEMINI_RETRY", f"Falla con {model_name}: {err_str[:120]}... Reintentando.")
                 
-                if "503" in err_str or "429" in err_str:
+                # 503/429: saturado un momento, se reintenta una vez el mismo
+                # modelo. 504, timeout u otro error: directo al siguiente modelo.
+                if ("503" in err_str or "429" in err_str) and attempt == 0:
                     await asyncio.sleep(1.5)
                 else:
                     break
@@ -316,7 +340,12 @@ async def generate_with_fallback(contents, system_instruction, response_schema=N
 # ------------------------------------------------------------------
 # TAREA DE FONDO (ASYNC CALLBACK)
 # ------------------------------------------------------------------
+# Plazo total del afiche: el maxDuration de vercel.json menos un margen para
+# el callback a Node (éxito o error). Configurable con FLYER_PLAZO_S.
+FLYER_PLAZO_S = float(os.getenv("FLYER_PLAZO_S", "270"))
+
 async def task_extract_flyer_and_notify(payload: FlyerPayload):
+    deadline = time.time() + FLYER_PLAZO_S
     try:
         log.info("GEMINI_TASK", f"Iniciando procesamiento de afiche para {mask_phone(payload.phone_number)}...")
         contents = []
@@ -359,7 +388,9 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
         response = await generate_with_fallback(
             contents=contents,
             system_instruction=system_instruction,
-            response_schema=ListaOfertasViaje
+            response_schema=ListaOfertasViaje,
+            deadline=deadline,
+            por_intento=POR_INTENTO_FLYER_S
         )
 
         datos_dict = json.loads(response.text)
