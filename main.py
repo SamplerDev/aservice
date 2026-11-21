@@ -247,6 +247,25 @@ class ChatRequest(BaseModel):
     busqueda_sin_resultados: Optional[dict] = None
     history: Optional[List[ChatMessage]] = []
 
+# Respuesta del chat: el texto para el cliente y, si el cliente ya quiere
+# reservar y dio sus datos, la solicitud de reserva. Node la registra, le
+# manda al cliente un aviso fijo ("tus datos quedaron tomados, aguardá la
+# confirmación") y pausa el bot en ese chat.
+class DatosReserva(BaseModel):
+    nombre: Optional[str] = Field(None, description="Nombre y apellido del cliente, tal como lo escribió")
+    dni: Optional[str] = Field(None, description="DNI si lo dio, solo números")
+    email: Optional[str] = Field(None, description="Email si lo dio")
+    pasajeros: Optional[int] = Field(None, description="Cantidad de pasajeros (incluido el cliente)")
+    oferta_id: Optional[int] = Field(None, description="El id de la salida elegida, tal como figura en 'salidas' del catálogo")
+    destino: Optional[str] = Field(None, description="Destino del viaje elegido")
+    fecha_salida: Optional[str] = Field(None, description="Fecha de la salida elegida")
+    notas: Optional[str] = Field(None, description="Otro dato útil que haya dado: edades, habitación, desde dónde sale, etc.")
+
+class ChatRespuesta(BaseModel):
+    respuesta: str = Field(description="El mensaje de WhatsApp para el cliente")
+    reserva_lista: bool = Field(False, description="true solo si el cliente quiere reservar y ya dio nombre y apellido, cantidad de pasajeros y la salida elegida")
+    reserva: Optional[DatosReserva] = None
+
 class ConfirmAction(str, Enum):
     APROBAR = "APROBAR"
     RECHAZAR = "RECHAZAR"
@@ -518,7 +537,8 @@ async def chat_agent(payload: ChatRequest):
         Cómo viene el catálogo: cada entrada es UN viaje (destino, hotel,
         régimen y duración) y en "salidas" trae TODAS sus fechas. Si el
         precio es el mismo para todas, está una vez en "precio_promo" del
-        viaje; si cambia, cada salida trae el suyo.
+        viaje; si cambia, cada salida trae el suyo. Cada salida trae su
+        "id" (no se lo muestres al cliente: es para la reserva).
 
         Tus reglas:
         1. Respondé ÚNICAMENTE basándote en este catálogo.
@@ -555,6 +575,23 @@ async def chat_agent(payload: ChatRequest):
            interesaría para poder ofrecerle alternativas reales.
         5. Mantené las respuestas concisas, amables y adecuadas para un chat
            de WhatsApp.
+        6. RESERVAS. Si el cliente quiere reservar, señar, comprar o pagar:
+           a) Pedile en UN solo mensaje los datos que todavía no dio:
+              nombre y apellido, DNI, cantidad de pasajeros y qué salida
+              (fecha) elige. Si ya los dio antes en la charla, no los
+              vuelvas a pedir.
+           b) NUNCA pases datos de pago (CBU, alias, cuenta, link de pago),
+              NUNCA pidas que pague o transfiera, y NUNCA digas que el lugar
+              está reservado o confirmado: la disponibilidad la confirma un
+              asesor.
+           c) Cuando ya tengas nombre y apellido, cantidad de pasajeros y la
+              salida elegida (el DNI si lo dio), poné reserva_lista en true y
+              completá "reserva" con esos datos; en oferta_id va el id de la
+              salida elegida. En ese caso "respuesta" puede ser una línea
+              corta: el sistema le manda al cliente el aviso de que sus
+              datos quedaron tomados.
+           d) Mientras falten datos, o si el cliente solo pregunta, dejá
+              reserva_lista en false.
         {instruccion_sin_match}
         """
 
@@ -570,13 +607,25 @@ async def chat_agent(payload: ChatRequest):
         # Ejecución asíncrona no bloqueante
         response = await generate_with_fallback(
             contents=contents,
-            system_instruction=system_instruction
+            system_instruction=system_instruction,
+            response_schema=ChatRespuesta
         )
 
         duration = round((time.time() - start_gemini) * 1000, 2)
-        log.success("CHAT_RES", f"Respuesta generada en {duration}ms ({len(response.text)} caracteres)")
+        # Si el modelo no devolvió el JSON esperado, se usa el texto tal
+        # cual como respuesta (sin reserva): nunca se deja al cliente sin
+        # contestar por esto.
+        try:
+            salida = ChatRespuesta.model_validate_json(response.text)
+        except Exception:
+            log.warn("CHAT_JSON", "La respuesta no vino en el formato esperado: se usa el texto tal cual.")
+            salida = ChatRespuesta(respuesta=response.text)
+        log.success("CHAT_RES", f"Respuesta generada en {duration}ms ({len(salida.respuesta)} caracteres, reserva_lista={salida.reserva_lista})")
 
-        return {"response": response.text}
+        return {
+            "response": salida.respuesta,
+            "reserva": salida.reserva.model_dump() if (salida.reserva_lista and salida.reserva) else None
+        }
 
     except Exception as e:
         log.error("CHAT_ERR", f"Error en Chat Gemini: {str(e)}")
