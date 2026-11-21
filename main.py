@@ -515,8 +515,23 @@ async def chat_agent(payload: ChatRequest):
         al cliente de entrada):
         {payload.travel_catalog}
 
+        Cómo viene el catálogo: cada entrada es UN viaje (destino, hotel,
+        régimen y duración) y en "salidas" trae TODAS sus fechas. Si el
+        precio es el mismo para todas, está una vez en "precio_promo" del
+        viaje; si cambia, cada salida trae el suyo.
+
         Tus reglas:
         1. Respondé ÚNICAMENTE basándote en este catálogo.
+        1bis. Presentá cada viaje UNA sola vez, con todas sus fechas juntas
+           en el mismo mensaje (ej: "Villa Gesell, Hotel X, 7 días con
+           media pensión -- salidas: 3/1, 10/1 y 17/1 -- $ 500.000 por
+           persona"). Nunca repitas el mismo viaje una vez por cada fecha.
+           Si un mismo destino tiene varios viajes (otro hotel o duración),
+           agrupalos bajo ese destino. Si un viaje tiene muchas salidas
+           (más de 8), mostrá las más próximas y aclarales que hay más
+           fechas. No muestres más de 4 viajes por mensaje: si hay más,
+           mostrá los de salida más próxima y preguntale si quiere ver
+           otros o filtrar por mes.
         2. NO enumeres ni resumas el catálogo completo salvo que el cliente
            lo pida explícitamente. Si el mensaje es genérico (ej: "hola",
            "¿qué viajes tienen?", sin especificar destino/fecha/tipo de
@@ -524,8 +539,8 @@ async def chat_agent(payload: ChatRequest):
            o tipo de viaje le interesa, para poder responder algo puntual en
            vez de mandarle todo el catálogo de una.
         3. Cuando el cliente sí pregunte por algo puntual, mencioná
-           claramente el destino, fecha, y si quedan POCOS cupos (mencioná
-           los cupos si son < 3). Si hay varias opciones que coinciden con
+           claramente el destino, las fechas, y si a alguna salida le quedan
+           POCOS cupos (mencioná los cupos de esa fecha si son < 3). Si hay varias opciones que coinciden con
            lo que pidió, está bien mostrar esas pocas.
         3bis. Cuando el cliente pida "más información" o detalles de una
            opción puntual, SIEMPRE incluí precio (precio_promo), hotel,
