@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
 
 
 # ------------------------------------------------------------------
@@ -94,13 +93,8 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = FastAPI(title="AI Agentic Microservice (Gemini)")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://slateblue-horse-642737.hostingersite.com"],
-    allow_credentials=True,
-    allow_methods=["POST"],
-    allow_headers=["X-API-Key", "Content-Type"],
-)
+# Sin CORS: a este servicio solo lo llama el backend Node (servidor a
+# servidor), nunca un navegador. Antes habilitaba el dominio viejo de Hostinger.
 
 # ------------------------------------------------------------------
 # MIDDLEWARE Y SEGURIDAD UNIFICADA
@@ -424,7 +418,8 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
                         json={
                             "phoneNumber": payload.phone_number,
                             "error": True,
-                            "message": f"Error procesando la imagen: {str(e)}"
+                            "message": f"Error procesando la imagen: {str(e)}"[:300],
+                            "fuenteId": payload.fuente_id
                         },
                         headers={
                             "X-API-Key": INTERNAL_API_KEY,
