@@ -176,6 +176,25 @@ class OfertaViaje(BaseModel):
         "'Europa'). Usá 'Otro / No identificado' SOLO si el destino no "
         "encaja claramente en ninguna de estas categorías."
     ))
+    provincia: Optional[str] = Field(None, description=(
+        "Provincia argentina del destino, o el PAÍS si es al exterior, con su "
+        "nombre oficial y acentos (ej: 'Villa Carlos Paz' -> 'Córdoba'; 'Mar del "
+        "Plata' -> 'Buenos Aires'; 'Bariloche' -> 'Río Negro'; 'Iguazú' -> "
+        "'Misiones'; 'Florianópolis' -> 'Brasil'; 'Punta Cana' -> 'República "
+        "Dominicana'). Para la Ciudad Autónoma de Buenos Aires, 'CABA'. Sirve para "
+        "que un cliente que busca 'Córdoba' encuentre Carlos Paz. null solo si no "
+        "se puede saber."
+    ))
+    palabras_clave: List[str] = Field(default_factory=list, description=(
+        "Entre 3 y 8 palabras o frases cortas con las que un cliente buscaría ESTE "
+        "viaje sin nombrar el destino exacto: zona o región turística (ej: "
+        "'sierras', 'Valle de Punilla', 'costa atlántica', 'Caribe'), atractivos o "
+        "tipo de paisaje (ej: 'lago', 'playa', 'nieve', 'cataratas', 'termas'), y "
+        "tipo de viaje si el afiche lo dice (ej: 'egresados', 'jubilados', 'all "
+        "inclusive', 'escapada'). Que sean concretas de este viaje: NO pongas "
+        "palabras genéricas que servirían para cualquiera ('viaje', 'oferta', "
+        "'promo', 'turismo', 'vacaciones'), ni repitas el destino ni la provincia."
+    ))
     fecha_salida: str = Field(description=(
         "UNA sola fecha de salida, escrita SIEMPRE con este formato: "
         "'<día> de <mes>' con el mes completo en minúsculas (ej: '3 de octubre', "
@@ -243,9 +262,10 @@ class ConfirmRequest(BaseModel):
 class IntentPayload(BaseModel):
     user_message: str
     destinos_conocidos: List[str] = []
+    terminos_busqueda: List[str] = []
 
 class IntentExtraido(BaseModel):
-    destino: Optional[str] = Field(None, description="El lugar/destino que pide el cliente. Si coincide con uno de destinos_conocidos, escribilo EXACTAMENTE igual que en esa lista (para poder filtrar el catálogo). Si el cliente pide un lugar real y concreto que NO está en destinos_conocidos (ej. pregunta por una ciudad/provincia/país que la agencia no tiene activa ahora), escribí igual el nombre de ese lugar tal como lo entendiste -- NO lo pongas en None solo porque no está en la lista, hace falta igual para poder sugerirle algo cercano. Usá None únicamente si el cliente no menciona ningún lugar geográfico concreto (ej. 'hola', '¿qué tienen?').")
+    destino: Optional[str] = Field(None, description="El lugar/destino que pide el cliente. Si coincide con uno de destinos_conocidos, escribilo EXACTAMENTE igual que en esa lista (para poder filtrar el catálogo). Si en cambio pide una provincia, un país, una zona o un tipo de lugar que está en la lista de provincias, países y palabras clave (ej. 'Córdoba', 'playa', 'sierras'), escribí ese término EXACTAMENTE como figura ahí: también sirve como filtro. Si el cliente pide un lugar real y concreto que NO está en destinos_conocidos (ej. pregunta por una ciudad/provincia/país que la agencia no tiene activa ahora), escribí igual el nombre de ese lugar tal como lo entendiste -- NO lo pongas en None solo porque no está en la lista, hace falta igual para poder sugerirle algo cercano. Usá None únicamente si el cliente no menciona ningún lugar geográfico concreto (ej. 'hola', '¿qué tienen?').")
     mes: Optional[int] = Field(None, description="Mes de salida que pide, del 1 al 12, si lo menciona explícita o relativamente (ej: 'el mes que viene', 'para fin de año', resolviendo sobre la fecha de hoy que se da en el prompt). None si no lo menciona.")
     busca_promocion: bool = Field(False, description="True SOLO si el cliente pregunta específicamente por promociones, descuentos u ofertas especiales.")
     consulta_especifica: bool = Field(..., description="True si el mensaje pregunta por algo concreto (destino, fecha, tipo de viaje, promoción). False si es un saludo genérico o una pregunta vaga sin ningún criterio identificable (ej: 'hola', '¿qué tienen?', 'quiero viajar').")
@@ -376,7 +396,11 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             "6. Clasificá region según la definición del campo -- es para poder sugerir "
             "destinos cercanos cuando no haya stock exacto de lo pedido, así que tiene "
             "que ser consistente entre afiches (el mismo destino siempre a la misma "
-            "región)."
+            "región).\n"
+            "7. Completá provincia y palabras_clave según la definición de cada campo: "
+            "son para que el cliente encuentre el viaje buscando la provincia, el país "
+            "o la zona (ej. 'Córdoba', 'sierras') aunque no escriba el destino exacto. "
+            "No hace falta que figuren en el afiche: usá tu conocimiento del lugar."
         )
 
         response = await generate_with_fallback(
@@ -578,10 +602,15 @@ async def extract_intent(payload: IntentPayload):
     try:
         hoy = datetime.now().strftime("%Y-%m-%d (%A)")
         destinos_texto = ", ".join(payload.destinos_conocidos) if payload.destinos_conocidos else "(no hay destinos con salidas activas en este momento)"
+        # Provincias/países y palabras clave de los viajes activos (ej.
+        # 'Córdoba', 'sierras'): el cliente puede buscar por eso sin
+        # nombrar el destino, y sirven igual como filtro.
+        terminos_texto = ", ".join(payload.terminos_busqueda) if payload.terminos_busqueda else "(ninguno)"
 
         prompt = (
             f"Hoy es {hoy}. El cliente escribió: \"{payload.user_message}\"\n\n"
-            f"Destinos con salidas activas en este momento: {destinos_texto}\n\n"
+            f"Destinos con salidas activas en este momento: {destinos_texto}\n"
+            f"Provincias, países y palabras clave de esos viajes: {terminos_texto}\n\n"
             "Extraé la intención de este mensaje puntual."
         )
 
