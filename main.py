@@ -592,6 +592,9 @@ async def chat_agent(payload: ChatRequest):
               3ter); si mostrás varios, por cada uno la línea de 1 pago
               con tarjeta de crédito y que hay cuotas, ofreciendo el
               detalle.
+           d) Los cargos (cargo por servicio, etc.) se pagan también con
+              tarjeta: ya están dentro de cada monto de "opciones_de_pago".
+              Si preguntan, aclaralo así; nunca los sumes de nuevo.
         3ter. CUOTAS Y FORMAS DE PAGO. Si el cliente pregunta por cuotas,
            tarjeta, recargo, interés o cómo pagar:
            a) Respondé con las "opciones_de_pago" de ese viaje copiando los
