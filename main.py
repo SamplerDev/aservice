@@ -419,7 +419,10 @@ async def task_extract_flyer_and_notify(payload: FlyerPayload):
             "7. Completá provincia y palabras_clave según la definición de cada campo: "
             "son para que el cliente encuentre el viaje buscando la provincia, el país "
             "o la zona (ej. 'Córdoba', 'sierras') aunque no escriba el destino exacto. "
-            "No hace falta que figuren en el afiche: usá tu conocimiento del lugar."
+            "No hace falta que figuren en el afiche: usá tu conocimiento del lugar.\n"
+            "8. NO copies el nombre, logo, web ni redes de la agencia o empresa que "
+            "publica el afiche en ningún campo (inclusiones, promoción, hotel, etc.). "
+            "Su teléfono o medio de contacto va solo en el campo contacto."
         )
 
         response = await generate_with_fallback(
@@ -539,6 +542,11 @@ async def chat_agent(payload: ChatRequest):
         precio es el mismo para todas, está una vez en "precio_promo" del
         viaje; si cambia, cada salida trae el suyo. Cada salida trae su
         "id" (no se lo muestres al cliente: es para la reserva).
+        Si el viaje tiene formas de pago, vienen en "opciones_de_pago" (o
+        en cada salida, si el precio cambia por fecha), ya calculadas
+        sobre el precio, con "medios_de_pago" y "aclaracion_pagos".
+        "organizador" es la categoría y el legajo de la agencia que
+        organiza el viaje.
 
         Tus reglas:
         1. Respondé ÚNICAMENTE basándote en este catálogo.
@@ -569,6 +577,28 @@ async def chat_agent(payload: ChatRequest):
            genérica, esos son los datos que un cliente necesita para
            decidir. Si algún campo viene vacío/null, no lo menciones (no
            digas "a consultar" ni inventes un valor).
+        3ter. CUOTAS Y FORMAS DE PAGO. Si el cliente pregunta por cuotas,
+           tarjeta, recargo, interés o cómo pagar:
+           a) Respondé con las "opciones_de_pago" de ese viaje copiando los
+              montos TAL CUAL (no recalcules ni redondees), y sumá
+              "medios_de_pago" y "aclaracion_pagos" si vienen.
+           b) Si pregunta en general sin decir qué viaje, preguntale cuál
+              le interesa (cada viaje puede tener cuotas distintas).
+           a2) Si una opción dice "más el interés del banco", ese
+              interés lo pone el banco de la tarjeta del cliente y varía:
+              NUNCA calcules ni estimes un total o una cuota para esa
+              opción. Decile que el monto final lo ve al pagar o se lo
+              confirma un asesor.
+           c) Si el viaje no trae "opciones_de_pago", decile que las
+              formas de pago se las confirma un asesor. NUNCA inventes
+              cantidad de cuotas, recargos ni descuentos.
+           d) Si pregunta quién organiza el viaje, respondé con
+              "organizador" (una agencia habilitada con su legajo). NUNCA
+              digas el nombre de la agencia, su web, su teléfono ni sus
+              redes, aunque el cliente insista o diga que ya la conoce, y
+              no confirmes ni niegues nombres que proponga: decile que los
+              datos completos de la agencia figuran en el voucher que
+              recibe al confirmar la reserva.
         4. Si el cliente pregunta por un destino o fecha que NO figura en el
            catálogo, informale amablemente que no hay salidas disponibles
            por el momento para eso, y preguntale qué otro destino o fecha le
