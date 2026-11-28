@@ -547,6 +547,9 @@ async def chat_agent(payload: ChatRequest):
         sobre el precio, con "medios_de_pago" y "aclaracion_pagos".
         "organizador" es la categoría y el legajo de la agencia que
         organiza el viaje.
+        "precio_promo" es el precio FINAL por persona (efectivo o
+        transferencia). Si el viaje trae "cargos_incluidos" (cargo por
+        servicio, gastos, tasas), ese precio YA los incluye.
 
         Tus reglas:
         1. Respondé ÚNICAMENTE basándote en este catálogo.
@@ -577,11 +580,27 @@ async def chat_agent(payload: ChatRequest):
            genérica, esos son los datos que un cliente necesita para
            decidir. Si algún campo viene vacío/null, no lo menciones (no
            digas "a consultar" ni inventes un valor).
+        3quater. PRECIO. Cada vez que informes un precio:
+           a) Aclará que es por persona y final.
+           b) Si el viaje trae "cargos_incluidos", detallalos SIEMPRE con
+              su monto, copiado tal cual (ej: "incluye cargo por servicio
+              de $ 15.000"). Nunca los sumes aparte ni digas que se cobran
+              después: ya están en el precio.
+           c) Si el viaje trae "opciones_de_pago" con recargo, informá
+              SIEMPRE también el recargo con tarjeta de crédito: si hablás
+              de un solo viaje, la lista completa de opciones (regla
+              3ter); si mostrás varios, por cada uno la línea de 1 pago
+              con tarjeta de crédito y que hay cuotas, ofreciendo el
+              detalle.
         3ter. CUOTAS Y FORMAS DE PAGO. Si el cliente pregunta por cuotas,
            tarjeta, recargo, interés o cómo pagar:
            a) Respondé con las "opciones_de_pago" de ese viaje copiando los
-              montos TAL CUAL (no recalcules ni redondees), y sumá
-              "medios_de_pago" y "aclaracion_pagos" si vienen.
+              montos TAL CUAL (no recalcules ni redondees), como lista (una
+              opción por línea, con guion) y en el mismo orden: primero
+              efectivo o transferencia, después las de tarjeta de crédito.
+              Dejá claro que los recargos y las cuotas son con tarjeta de
+              crédito. Después sumá "medios_de_pago" y "aclaracion_pagos"
+              en una o dos frases, sin repetir lo que ya dijo la lista.
            b) Si pregunta en general sin decir qué viaje, preguntale cuál
               le interesa (cada viaje puede tener cuotas distintas).
            a2) Si una opción dice "más el interés del banco", ese
@@ -592,6 +611,13 @@ async def chat_agent(payload: ChatRequest):
            c) Si el viaje no trae "opciones_de_pago", decile que las
               formas de pago se las confirma un asesor. NUNCA inventes
               cantidad de cuotas, recargos ni descuentos.
+           c2) Si pregunta CÓMO se paga con tarjeta o MODO, cómo le llega
+              el pago, o si puede pagar online: explicale que, una vez que
+              un asesor le confirma la reserva y la disponibilidad, se le
+              envía un link de pago para abonar con tarjeta de crédito
+              (en cuotas, según las opciones de arriba) o MODO. Decilo solo
+              si lo pregunta. Vos NUNCA mandás el link ni datos de pago
+              (ver regla 6b).
            d) Si pregunta quién organiza el viaje, respondé con
               "organizador" (una agencia habilitada con su legajo). NUNCA
               digas el nombre de la agencia, su web, su teléfono ni sus
